@@ -1,0 +1,757 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="부가세 가산세">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#1565c0">
+<title>부가가치세 가산세 계산기</title>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+html,body,#root{height:100%;width:100%;overflow-x:hidden;}
+body{font-family:'Pretendard','Noto Sans KR',-apple-system,sans-serif;overscroll-behavior-y:contain;}
+html{scroll-behavior:smooth;-webkit-overflow-scrolling:touch;}
+.app-shell{padding-bottom:env(safe-area-inset-bottom);}
+input,select,button{font-family:inherit;}
+.field{margin-bottom:16px;}
+.bottom-tabs{display:none;}
+@media(max-width:768px){
+  .top-tabs{display:none!important;}
+  .bottom-tabs{display:flex!important;position:fixed;bottom:0;left:0;right:0;z-index:100;padding-bottom:env(safe-area-inset-bottom);overflow-x:auto;-webkit-overflow-scrolling:touch;}
+  .bottom-tabs button{flex:0 0 auto;min-width:64px;display:flex;flex-direction:column;align-items:center;gap:2px;padding:8px 6px 6px;border:none;background:transparent;font-size:10px;cursor:pointer;position:relative;white-space:nowrap;}
+  .bottom-tabs button .tab-icon{font-size:18px;}
+  .main-content{padding-bottom:76px!important;}
+}
+.nav-btn{display:flex;align-items:center;justify-content:center;gap:6px;width:100%;padding:14px;border:none;border-radius:12px;font-size:15px;font-weight:600;cursor:pointer;transition:background .15s,transform .1s;}
+.nav-btn:active{transform:scale(0.98);}
+@media print{.top-tabs,.bottom-tabs,.app-header,.nav-area,.kitty-deco,.theme-sw{display:none!important;}.main-content{padding:0!important;}}
+.formula-box{padding:14px 16px;border-radius:10px;margin-bottom:16px;font-family:'D2Coding','Consolas',monospace;line-height:1.8;}
+.formula-line{font-size:14px;}
+.formula-result{font-size:18px;font-weight:700;margin-top:4px;}
+.tier-table{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px;}
+.tier-table th,.tier-table td{padding:8px 10px;border:1px solid;text-align:center;}
+.tier-table th{font-weight:600;font-size:12px;}
+.tier-active{font-weight:700 !important;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useMemo, Fragment, useRef, useEffect } = React;
+const fmt = (n) => { if(n===null||n===undefined||n==="") return ""; if(n===0) return "0"; return Number(n).toLocaleString("ko-KR"); };
+const parse = (s) => Number(String(s).replace(/,/g,"")) || 0;
+const fmtD = (n) => n < 0 ? "△"+fmt(Math.abs(n)) : fmt(n);
+const fmtPct = (n) => n % 1 === 0 ? n+"%" : n.toFixed(1)+"%";
+
+/* ═══ DATE HELPERS ═══ */
+const PERIODS = [
+  { key:"1p", label:"1기 예정 (1~3월)", dl:(y)=>`${y}-04-25` },
+  { key:"1c", label:"1기 확정 (1~6월)", dl:(y)=>`${y}-07-25` },
+  { key:"2p", label:"2기 예정 (7~9월)", dl:(y)=>`${y}-10-25` },
+  { key:"2c", label:"2기 확정 (7~12월)", dl:(y)=>`${parseInt(y)+1}-01-25` },
+];
+const daysBetween = (d1s, d2s) => {
+  if(!d1s||!d2s) return 0;
+  const a=new Date(d1s), b=new Date(d2s);
+  if(isNaN(a)||isNaN(b)) return 0;
+  return Math.max(0, Math.ceil((b-a)/(1000*60*60*24)));
+};
+const fmtDate = (ds) => {
+  if(!ds) return "-";
+  const d=new Date(ds);
+  return `${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,"0")}.${String(d.getDate()).padStart(2,"0")}`;
+};
+
+/* ═══ 감면율 ═══ */
+const getAmendedReduction = (days) => {
+  if(days<=0) return 0;
+  if(days<=30) return 90; if(days<=90) return 75; if(days<=180) return 50;
+  if(days<=365) return 30; if(days<=547) return 20; if(days<=730) return 10;
+  return 0;
+};
+const getLateFilingReduction = (days) => {
+  if(days<=0) return 0;
+  if(days<=30) return 50; if(days<=90) return 30; if(days<=180) return 20;
+  return 0;
+};
+const AMENDED_TIERS = [
+  {label:"~1개월",days:30,rate:90},{label:"1~3개월",days:90,rate:75},{label:"3~6개월",days:180,rate:50},
+  {label:"6개월~1년",days:365,rate:30},{label:"1년~1년6월",days:547,rate:20},{label:"1년6월~2년",days:730,rate:10},
+];
+const LATE_TIERS = [
+  {label:"~1개월",days:30,rate:50},{label:"1~3개월",days:90,rate:30},{label:"3~6개월",days:180,rate:20},
+];
+
+/* ═══ 세금계산서 유형 ═══ */
+const INV_TYPES = [
+  {key:"notIssued",label:"미발급",rate:2},
+  {key:"lateIssued",label:"지연발급",rate:1},
+  {key:"fake",label:"가공(위장) 발급",rate:2},
+  {key:"fakeRcv",label:"가공(위장) 수취",rate:3},
+  {key:"noTransmit",label:"전자세금계산서 미전송",rate:0.5},
+  {key:"lateTransmit",label:"전자세금계산서 지연전송",rate:0.3},
+  {key:"noSummary",label:"합계표 미제출·부실기재",rate:0.5},
+];
+
+/* ═══ THEMES ═══ */
+const THEMES = {
+  green:{
+    name:"🌿 그린",bg:"#f2f7f2",cardBg:"#fff",cardBdr:"#c8dcc8",cardHBg:"#f5faf5",
+    primary:"#2e7d32",primaryGrad:"linear-gradient(135deg,#388e3c,#66bb6a)",
+    accent:"#2e7d32",accentLight:"#e8f5e9",text:"#2d3a2d",textLight:"#6b8a6b",hint:"#4a7a4a",
+    inputBdr:"#c8dcc8",inputFocusBdr:"#4caf50",inputFocusBg:"#f1f8f1",inputFocusShadow:"rgba(76,175,80,.12)",
+    tabActiveTxt:"#2e7d32",tabInactiveTxt:"rgba(255,255,255,.9)",tabBg:"#388e3c",
+    bottomTabBg:"#fff",bottomTabBdr:"#c8dcc8",bottomTabActive:"#2e7d32",bottomTabInactive:"#8aaa8a",
+    badgeBg:"#e53935",navSecBg:"#e8f5e9",navSecTxt:"#2e7d32",
+    resultGood:"#1b5e20",resultBad:"#c62828",resultWarn:"#e65100",resultBlue:"#1565c0",
+    formulaBg:"#f5faf5",formulaBdr:"#c8dcc8",formulaAccent:"#2e7d32",
+    summaryBg:"#e8f5e9",summaryBdr:"#a5d6a7",warnBg:"#fff8e1",warnBdr:"#ffe082",warnTxt:"#e65100",
+    okBg:"#e8f5e9",okBdr:"#a5d6a7",okTxt:"#1b5e20",rowBdr:"#e0ece0",tierBg:"#f5faf5",tierActiveBg:"#c8e6c9",showKitty:false,
+  },
+  white:{
+    name:"⚪ 화이트",bg:"#f7f7f7",cardBg:"#fff",cardBdr:"#e0e0e0",cardHBg:"#fafafa",
+    primary:"#333",primaryGrad:"linear-gradient(135deg,#444,#666)",
+    accent:"#555",accentLight:"#f5f5f5",text:"#222",textLight:"#888",hint:"#999",
+    inputBdr:"#ddd",inputFocusBdr:"#333",inputFocusBg:"#f8f8f8",inputFocusShadow:"rgba(0,0,0,.08)",
+    tabActiveTxt:"#333",tabInactiveTxt:"rgba(255,255,255,.85)",tabBg:"#444",
+    bottomTabBg:"#fff",bottomTabBdr:"#e0e0e0",bottomTabActive:"#333",bottomTabInactive:"#aaa",
+    badgeBg:"#e53935",navSecBg:"#eee",navSecTxt:"#555",
+    resultGood:"#2e7d32",resultBad:"#c62828",resultWarn:"#e65100",resultBlue:"#1565c0",
+    formulaBg:"#fafafa",formulaBdr:"#e0e0e0",formulaAccent:"#333",
+    summaryBg:"#f5f5f5",summaryBdr:"#ddd",warnBg:"#fff8e1",warnBdr:"#ffe082",warnTxt:"#e65100",
+    okBg:"#e8f5e9",okBdr:"#a5d6a7",okTxt:"#2e7d32",rowBdr:"#eee",tierBg:"#fafafa",tierActiveBg:"#e0e0e0",showKitty:false,
+  },
+  kitty:{
+    name:"🎀 키티",bg:"#fff5f7",cardBg:"#fff",cardBdr:"#f0c4d0",cardHBg:"#fef7f9",
+    primary:"#e8567a",primaryGrad:"linear-gradient(135deg,#e8567a,#f0849a)",
+    accent:"#c0506a",accentLight:"#fff0f3",text:"#4a3548",textLight:"#a0849a",hint:"#c0506a",
+    inputBdr:"#f0c4d0",inputFocusBdr:"#e8567a",inputFocusBg:"#fff0f3",inputFocusShadow:"rgba(232,86,122,.12)",
+    tabActiveTxt:"#c0506a",tabInactiveTxt:"rgba(255,255,255,.9)",tabBg:"#e8567a",
+    bottomTabBg:"#fff",bottomTabBdr:"#f0c4d0",bottomTabActive:"#e8567a",bottomTabInactive:"#a0849a",
+    badgeBg:"#e8567a",navSecBg:"#fce4ec",navSecTxt:"#c0506a",
+    resultGood:"#276749",resultBad:"#d63384",resultWarn:"#e65100",resultBlue:"#1565c0",
+    formulaBg:"#fef7f9",formulaBdr:"#f0c4d0",formulaAccent:"#c0506a",
+    summaryBg:"#fff0f3",summaryBdr:"#f0c4d0",warnBg:"#fff8e1",warnBdr:"#ffe082",warnTxt:"#e65100",
+    okBg:"#e8f5e9",okBdr:"#a5d6a7",okTxt:"#2e7d32",rowBdr:"#fce4ec",tierBg:"#fef7f9",tierActiveBg:"#fce4ec",showKitty:true,
+  },
+};
+const KittyFace=({size=40,style:st,color="#e8567a"})=>(<svg width={size} height={size} viewBox="0 0 120 120" style={st}><ellipse cx="60" cy="68" rx="40" ry="35" fill="#fff" stroke="#555" strokeWidth="1.8"/><path d="M24,48 L16,12 L42,36 Z" fill="#fff" stroke="#555" strokeWidth="1.8" strokeLinejoin="round"/><path d="M96,48 L104,12 L78,36 Z" fill="#fff" stroke="#555" strokeWidth="1.8" strokeLinejoin="round"/><ellipse cx="44" cy="62" rx="4" ry="5" fill="#333"/><ellipse cx="76" cy="62" rx="4" ry="5" fill="#333"/><ellipse cx="60" cy="72" rx="3" ry="2.2" fill="#f7c948"/><line x1="8" y1="58" x2="36" y2="64" stroke="#555" strokeWidth="1.2"/><line x1="8" y1="68" x2="36" y2="68" stroke="#555" strokeWidth="1.2"/><line x1="112" y1="58" x2="84" y2="64" stroke="#555" strokeWidth="1.2"/><line x1="112" y1="68" x2="84" y2="68" stroke="#555" strokeWidth="1.2"/></svg>);
+const KittyMini=({size=24,style:st,color="#e8567a"})=>(<svg width={size} height={size} viewBox="0 0 120 120" style={{...st,display:"inline-block",verticalAlign:"middle",flexShrink:0}}><ellipse cx="60" cy="68" rx="40" ry="35" fill="#fff" stroke={color} strokeWidth="3"/><path d="M24,48 L16,12 L42,36 Z" fill="#fff" stroke={color} strokeWidth="3" strokeLinejoin="round"/><path d="M96,48 L104,12 L78,36 Z" fill="#fff" stroke={color} strokeWidth="3" strokeLinejoin="round"/><ellipse cx="44" cy="62" rx="5" ry="6" fill="#444"/><ellipse cx="76" cy="62" rx="5" ry="6" fill="#444"/><ellipse cx="60" cy="72" rx="3.5" ry="2.5" fill="#f7c948"/></svg>);
+
+/* ═══ COMPONENTS ═══ */
+const NumberInput = ({ value, onChange, placeholder="0", label, hint, t, disabled }) => {
+  const [focused, setFocused] = useState(false);
+  const display = focused ? (value===0?"":String(value)) : fmt(value);
+  return (<div className="field">{label&&<label style={{fontSize:13,color:t.textLight,marginBottom:5,display:"block",lineHeight:1.4}}>{label}</label>}<input type="text" inputMode="numeric" value={display} placeholder={placeholder} disabled={disabled} style={{width:"100%",padding:"10px 12px",border:"1px solid "+(focused?t.inputFocusBdr:t.inputBdr),borderRadius:10,fontSize:16,background:disabled?t.accentLight:focused?t.inputFocusBg:"#fff",outline:"none",boxSizing:"border-box",textAlign:"right",fontVariantNumeric:"tabular-nums",boxShadow:focused?"0 0 0 3px "+t.inputFocusShadow:"none",opacity:disabled?.7:1}} onFocus={()=>setFocused(true)} onBlur={()=>setFocused(false)} onChange={(e)=>onChange(parse(e.target.value))} />{hint&&<div style={{fontSize:11.5,color:t.hint,marginTop:3,paddingLeft:2,lineHeight:1.4}}>{hint}</div>}</div>);
+};
+const ReadonlyField = ({ label, value, sub, t, color }) => (<div className="field"><label style={{fontSize:13,color:t.textLight,marginBottom:5,display:"block"}}>{label}</label><div style={{padding:"10px 12px",background:t.accentLight,borderRadius:10,textAlign:"right",fontSize:16,fontWeight:700,fontVariantNumeric:"tabular-nums",color:color||(value<0?t.resultBad:t.accent),border:"1px solid "+t.cardBdr}}>{typeof value==="string"?value:fmtD(value)}</div>{sub&&<div style={{fontSize:11.5,color:t.textLight,marginTop:3,paddingLeft:2}}>{sub}</div>}</div>);
+
+const FormulaBox = ({ lines, result, resultLabel, t }) => (
+  <div className="formula-box" style={{background:t.formulaBg,border:"1.5px solid "+t.formulaBdr}}>
+    {lines.map((l,i)=><div key={i} className="formula-line" style={{color:t.text}}>{l}</div>)}
+    {result!==undefined&&<div className="formula-result" style={{color:t.formulaAccent,borderTop:"1px dashed "+t.formulaBdr,paddingTop:8,marginTop:6}}>
+      {resultLabel||"="} <span style={{fontSize:22}}>{typeof result==="string"?result:fmt(result)}</span>원
+    </div>}
+  </div>
+);
+
+const TABS = [
+  {key:"info",label:"기본정보",icon:"📋",short:"기본"},
+  {key:"nofile",label:"무신고",icon:"🚫",short:"무신고"},
+  {key:"under",label:"과소신고",icon:"📉",short:"과소"},
+  {key:"late",label:"납부지연",icon:"⏰",short:"지연"},
+  {key:"zero",label:"영세율",icon:"🌐",short:"영세율"},
+  {key:"unreg",label:"미등록",icon:"📝",short:"미등록"},
+  {key:"inv",label:"세금계산서",icon:"🧾",short:"계산서"},
+  {key:"reduce",label:"감면",icon:"💡",short:"감면"},
+  {key:"summary",label:"요약·출력",icon:"📊",short:"요약"},
+];
+
+/* ═══ MAIN APP ═══ */
+function App() {
+  const [tab, setTab] = useState("info");
+  const [theme, setTheme] = useState("green");
+  const t = THEMES[theme];
+  const topRef = useRef(null);
+  useEffect(()=>{topRef.current?.scrollIntoView({behavior:"smooth"});},[tab]);
+
+  /* ── 기본정보 ── */
+  const [taxYear, setTaxYear] = useState("2025");
+  const [taxPeriod, setTaxPeriod] = useState("2c");
+  const [filingType, setFilingType] = useState("amended");
+  const [actualFilingDate, setActualFilingDate] = useState("");
+  const [actualPaymentDate, setActualPaymentDate] = useState("");
+
+  const legalDeadline = useMemo(()=>{
+    const p = PERIODS.find(x=>x.key===taxPeriod);
+    return p ? p.dl(taxYear) : "";
+  },[taxYear, taxPeriod]);
+  const filingDays = useMemo(()=>daysBetween(legalDeadline, actualFilingDate),[legalDeadline, actualFilingDate]);
+  const paymentDays = useMemo(()=>daysBetween(legalDeadline, actualPaymentDate),[legalDeadline, actualPaymentDate]);
+
+  /* ── 무신고 ── */
+  const [noFilingTax, setNoFilingTax] = useState(0);
+  const [noFilingType, setNoFilingType] = useState("general");
+  const noFilingRate = noFilingType==="general"?20:noFilingType==="fraud"?40:60;
+  const noFilingPenalty = Math.floor(noFilingTax * noFilingRate / 100);
+
+  /* ── 과소신고 ── */
+  const [assessedTax, setAssessedTax] = useState(0);
+  const [reportedTax, setReportedTax] = useState(0);
+  const [underType, setUnderType] = useState("general");
+  const underTax = Math.max(0, assessedTax - reportedTax);
+  const underRate = underType==="general"?10:underType==="fraud"?40:60;
+  const underPenalty = Math.floor(underTax * underRate / 100);
+
+  /* ── 납부지연 ── */
+  const [unpaidTax, setUnpaidTax] = useState(0);
+  const latePenalty = Math.floor(unpaidTax * paymentDays * 0.00022);
+
+  /* ── 영세율 ── */
+  const [zeroBase, setZeroBase] = useState(0);
+  const [zeroReported, setZeroReported] = useState(0);
+  const zeroUnreported = Math.max(0, zeroBase - zeroReported);
+  const zeroPenalty = Math.floor(zeroUnreported * 0.005);
+
+  /* ── 미등록 ── */
+  const [unregSupply, setUnregSupply] = useState(0);
+  const unregPenalty = Math.floor(unregSupply * 0.01);
+
+  /* ── 세금계산서 ── */
+  const [invItems, setInvItems] = useState([{id:1, type:"notIssued", amount:0}]);
+  const [nextInvId, setNextInvId] = useState(2);
+  const invCalc = invItems.map(item=>{
+    const def = INV_TYPES.find(x=>x.key===item.type);
+    return {...item, rate:def?.rate||0, penalty:Math.floor(item.amount*(def?.rate||0)/100)};
+  });
+  const totalInvPenalty = invCalc.reduce((s,i)=>s+i.penalty,0);
+  const addInv=()=>{setInvItems([...invItems,{id:nextInvId,type:"notIssued",amount:0}]);setNextInvId(nextInvId+1);};
+  const delInv=(id)=>setInvItems(invItems.filter(i=>i.id!==id));
+  const updInv=(id,f,v)=>setInvItems(invItems.map(i=>i.id===id?{...i,[f]:v}:i));
+
+  /* ── 감면 계산 ── */
+  const amendedRedRate = filingType==="amended" ? getAmendedReduction(filingDays) : 0;
+  const lateRedRate = filingType==="late" ? getLateFilingReduction(filingDays) : 0;
+  const underReduction = filingType==="amended" ? Math.floor(underPenalty * amendedRedRate / 100) : 0;
+  const noFilingReduction = filingType==="late" ? Math.floor(noFilingPenalty * lateRedRate / 100) : 0;
+
+  /* ── 합계 ── */
+  const penalties = [
+    {name:"무신고가산세", before:noFilingPenalty, reduction:noFilingReduction, after:noFilingPenalty-noFilingReduction},
+    {name:"과소신고가산세", before:underPenalty, reduction:underReduction, after:underPenalty-underReduction},
+    {name:"납부지연가산세", before:latePenalty, reduction:0, after:latePenalty},
+    {name:"영세율 신고불성실", before:zeroPenalty, reduction:0, after:zeroPenalty},
+    {name:"사업자 미등록", before:unregPenalty, reduction:0, after:unregPenalty},
+    {name:"세금계산서 관련", before:totalInvPenalty, reduction:0, after:totalInvPenalty},
+  ];
+  const totalBefore = penalties.reduce((s,p)=>s+p.before,0);
+  const totalReduction = penalties.reduce((s,p)=>s+p.reduction,0);
+  const totalAfter = penalties.reduce((s,p)=>s+p.after,0);
+  const activePenalties = penalties.filter(p=>p.before>0);
+
+  /* ── 엑셀 출력 ── */
+  const exportExcel = () => {
+    const pInfo = PERIODS.find(x=>x.key===taxPeriod);
+    const ws_data = [
+      ["부가가치세 가산세 계산서"],
+      [],
+      ["과세기간", pInfo?.label||"", "귀속연도", taxYear],
+      ["법정신고기한", fmtDate(legalDeadline), "신고유형", filingType==="regular"?"정기신고":filingType==="amended"?"수정신고":"기한후신고"],
+      ["실제 신고일", fmtDate(actualFilingDate), "실제 납부일", fmtDate(actualPaymentDate)],
+      ["경과일수(신고)", filingDays+"일", "경과일수(납부)", paymentDays+"일"],
+      [],
+      ["가산세 종류","산출 가산세","감면율","감면액","납부할 가산세"],
+    ];
+    penalties.forEach(p=>{
+      const redRate = p.name==="무신고가산세"?lateRedRate:p.name==="과소신고가산세"?amendedRedRate:0;
+      ws_data.push([p.name, p.before, redRate?redRate+"%":"-", p.reduction, p.after]);
+    });
+    ws_data.push(["합계", totalBefore, "", totalReduction, totalAfter]);
+    ws_data.push([]);
+
+    if(noFilingPenalty>0){
+      ws_data.push(["[무신고가산세 상세]"]);
+      ws_data.push(["무신고 납부세액", noFilingTax, "유형", noFilingType==="general"?"일반":noFilingType==="fraud"?"부정":"국제거래부정"]);
+      ws_data.push(["가산세율", noFilingRate+"%", "가산세액", noFilingPenalty]);
+      ws_data.push([]);
+    }
+    if(underPenalty>0){
+      ws_data.push(["[과소신고가산세 상세]"]);
+      ws_data.push(["산출세액(결정세액)", assessedTax, "기신고 납부세액", reportedTax]);
+      ws_data.push(["과소신고 납부세액", underTax, "유형", underType==="general"?"일반":underType==="fraud"?"부정":"국제거래부정"]);
+      ws_data.push(["가산세율", underRate+"%", "가산세액", underPenalty]);
+      ws_data.push([]);
+    }
+    if(latePenalty>0){
+      ws_data.push(["[납부지연가산세 상세]"]);
+      ws_data.push(["미납세액", unpaidTax, "경과일수", paymentDays]);
+      ws_data.push(["일일이율", "0.022%", "가산세액", latePenalty]);
+      ws_data.push([]);
+    }
+    if(zeroPenalty>0){
+      ws_data.push(["[영세율 과세표준 신고불성실 상세]"]);
+      ws_data.push(["영세율 과세표준", zeroBase, "신고한 과세표준", zeroReported]);
+      ws_data.push(["미신고 과세표준", zeroUnreported, "가산세액(×0.5%)", zeroPenalty]);
+      ws_data.push([]);
+    }
+    if(unregPenalty>0){
+      ws_data.push(["[사업자 미등록 가산세 상세]"]);
+      ws_data.push(["미등록기간 공급가액", unregSupply, "가산세액(×1%)", unregPenalty]);
+      ws_data.push([]);
+    }
+    if(totalInvPenalty>0){
+      ws_data.push(["[세금계산서 관련 가산세 상세]"]);
+      ws_data.push(["위반유형","공급가액","가산세율","가산세액"]);
+      invCalc.filter(i=>i.penalty>0).forEach(i=>{
+        const def=INV_TYPES.find(x=>x.key===i.type);
+        ws_data.push([def?.label||"", i.amount, i.rate+"%", i.penalty]);
+      });
+      ws_data.push([]);
+    }
+
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(ws_data);
+    ws["!cols"] = [{wch:24},{wch:16},{wch:16},{wch:16},{wch:16}];
+    XLSX.utils.book_append_sheet(wb, ws, "가산세계산서");
+    XLSX.writeFile(wb, `부가세_가산세_${taxYear}_${taxPeriod}.xlsx`);
+  };
+
+  /* ── Navigation ── */
+  const tabKeys = TABS.map(x=>x.key);
+  const goNext=()=>{const i=tabKeys.indexOf(tab);if(i<tabKeys.length-1)setTab(tabKeys[i+1]);};
+  const goPrev=()=>{const i=tabKeys.indexOf(tab);if(i>0)setTab(tabKeys[i-1]);};
+
+  /* ── Styles ── */
+  const card={background:t.cardBg,borderRadius:14,border:"1.5px solid "+t.cardBdr,marginBottom:16,overflow:"hidden"};
+  const cardH={padding:"13px 16px",borderBottom:"1.5px solid "+t.cardBdr,fontWeight:700,fontSize:15,background:t.cardHBg,display:"flex",justifyContent:"space-between",alignItems:"center"};
+  const cardB={padding:"16px"};
+  const rw={display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderBottom:"1px solid "+t.rowBdr};
+  const btnGroup=(opts,val,onChange)=>(<div style={{display:"flex",gap:8,flexWrap:"wrap"}}>{opts.map(o=>(<button key={o.v} onClick={()=>onChange(o.v)} style={{flex:"1 1 auto",padding:"9px 12px",fontSize:13,fontWeight:val===o.v?600:400,background:val===o.v?t.primary:"#fff",color:val===o.v?"#fff":t.textLight,border:"1.5px solid "+(val===o.v?t.primary:t.cardBdr),borderRadius:8,cursor:"pointer"}}>{o.l}</button>))}</div>);
+
+  const navBtns = (
+    <div className="nav-area" style={{display:"flex",gap:10,marginTop:12,marginBottom:20}}>
+      {tabKeys.indexOf(tab)>0&&<button className="nav-btn" style={{flex:1,background:t.navSecBg,color:t.navSecTxt}} onClick={goPrev}>← 이전</button>}
+      {tabKeys.indexOf(tab)<tabKeys.length-1&&<button className="nav-btn" style={{flex:1,background:t.primaryGrad,color:"#fff"}} onClick={goNext}>{t.showKitty?"🎀 ":""}다음 →</button>}
+    </div>
+  );
+
+  return (
+    <div className="app-shell" style={{background:t.bg,minHeight:"100vh",fontSize:14,lineHeight:1.6,color:t.text}}>
+      <div ref={topRef}></div>
+      {/* Header */}
+      <div className="app-header" style={{background:t.primaryGrad,color:"#fff",padding:"18px 18px 14px",paddingTop:"max(18px, env(safe-area-inset-top))",position:"relative",overflow:"hidden"}}>
+        {t.showKitty&&<div className="kitty-deco" style={{position:"absolute",top:6,right:10,opacity:.2}}><KittyFace size={55} color="#fff"/></div>}
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <div>
+            <h1 style={{fontSize:18,fontWeight:700,margin:0}}>{t.showKitty?"🎀 ":""}부가가치세 가산세 계산기</h1>
+            <div style={{fontSize:11,opacity:.85,marginTop:2}}>국세기본법 §47의2~5 · 부가세법 §60</div>
+          </div>
+          <div className="theme-sw" style={{display:"flex",gap:4}}>
+            {Object.entries(THEMES).map(([k,th])=>(<button key={k} onClick={()=>setTheme(k)} style={{width:28,height:28,borderRadius:14,border:theme===k?"2px solid #fff":"2px solid rgba(255,255,255,.3)",background:theme===k?"rgba(255,255,255,.3)":"transparent",cursor:"pointer",fontSize:12,display:"flex",alignItems:"center",justifyContent:"center"}} title={th.name}>{th.name.slice(0,2)}</button>))}
+          </div>
+        </div>
+      </div>
+
+      {/* Top tabs - scrollable */}
+      <div className="top-tabs" style={{display:"flex",gap:0,background:t.tabBg,overflowX:"auto"}}>
+        {TABS.map(x=>(<button key={x.key} onClick={()=>setTab(x.key)} style={{padding:"9px 14px",fontSize:13,fontWeight:tab===x.key?600:400,color:tab===x.key?t.tabActiveTxt:t.tabInactiveTxt,background:tab===x.key?t.bg:"transparent",border:"none",borderRadius:"8px 8px 0 0",cursor:"pointer",whiteSpace:"nowrap",flexShrink:0}}>{x.icon} {x.label}</button>))}
+      </div>
+
+      <div className="main-content" style={{padding:16,maxWidth:680,margin:"0 auto"}}>
+
+        {/* ═══ TAB 1: 기본정보 ═══ */}
+        {tab==="info"&&(<Fragment>
+          <div style={card}><div style={cardH}><span>📋 기본정보</span></div><div style={cardB}>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
+              <div className="field">
+                <label style={{fontSize:13,color:t.textLight,marginBottom:5,display:"block"}}>귀속연도</label>
+                <input type="text" value={taxYear} onChange={e=>setTaxYear(e.target.value)} style={{width:"100%",padding:"10px 12px",border:"1px solid "+t.inputBdr,borderRadius:10,fontSize:16,background:"#fff",outline:"none",textAlign:"center"}}/>
+              </div>
+              <div className="field">
+                <label style={{fontSize:13,color:t.textLight,marginBottom:5,display:"block"}}>과세기간</label>
+                <select value={taxPeriod} onChange={e=>setTaxPeriod(e.target.value)} style={{width:"100%",padding:"10px 12px",border:"1px solid "+t.inputBdr,borderRadius:10,fontSize:14,background:"#fff"}}>
+                  {PERIODS.map(p=><option key={p.key} value={p.key}>{p.label}</option>)}
+                </select>
+              </div>
+            </div>
+            <ReadonlyField t={t} label="법정신고기한" value={fmtDate(legalDeadline)} />
+            <div className="field">
+              <label style={{fontSize:13,color:t.textLight,marginBottom:5,display:"block"}}>신고유형</label>
+              {btnGroup([
+                {v:"regular",l:"정기신고"},{v:"amended",l:"수정신고"},{v:"late",l:"기한후신고"}
+              ], filingType, setFilingType)}
+              <div style={{fontSize:11.5,color:t.hint,marginTop:6,paddingLeft:2}}>
+                {filingType==="amended"&&"※ 과소신고가산세 감면 대상 (경과기간에 따라 90%~10%)"}
+                {filingType==="late"&&"※ 무신고가산세 감면 대상 (경과기간에 따라 50%~20%)"}
+                {filingType==="regular"&&"※ 정기 신고 (감면 해당 없음)"}
+              </div>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+              <div className="field">
+                <label style={{fontSize:13,color:t.textLight,marginBottom:5,display:"block"}}>실제 신고일</label>
+                <input type="date" value={actualFilingDate} onChange={e=>setActualFilingDate(e.target.value)} style={{width:"100%",padding:"10px 12px",border:"1px solid "+t.inputBdr,borderRadius:10,fontSize:14,background:"#fff",outline:"none"}}/>
+              </div>
+              <div className="field">
+                <label style={{fontSize:13,color:t.textLight,marginBottom:5,display:"block"}}>실제 납부일</label>
+                <input type="date" value={actualPaymentDate} onChange={e=>setActualPaymentDate(e.target.value)} style={{width:"100%",padding:"10px 12px",border:"1px solid "+t.inputBdr,borderRadius:10,fontSize:14,background:"#fff",outline:"none"}}/>
+              </div>
+            </div>
+            {(filingDays>0||paymentDays>0)&&<div style={{padding:"10px 14px",background:t.summaryBg,borderRadius:10,border:"1px solid "+t.summaryBdr,marginTop:4}}>
+              {filingDays>0&&<div style={{fontSize:13,color:t.accent}}>신고 경과일수: <strong>{filingDays}일</strong></div>}
+              {paymentDays>0&&<div style={{fontSize:13,color:t.accent}}>납부 경과일수: <strong>{paymentDays}일</strong></div>}
+            </div>}
+          </div></div>
+          {navBtns}
+        </Fragment>)}
+
+        {/* ═══ TAB 2: 무신고가산세 ═══ */}
+        {tab==="nofile"&&(<Fragment>
+          <div style={card}><div style={cardH}><span>🚫 무신고가산세</span><span style={{fontSize:12,color:t.textLight}}>국기법 §47의2</span></div><div style={cardB}>
+            <FormulaBox t={t}
+              lines={[
+                "무신고가산세 = 무신고 납부세액 × 가산세율",
+                `= ${fmt(noFilingTax)} × ${noFilingRate}%`,
+              ]}
+              result={noFilingPenalty}
+            />
+            <div className="field">
+              <label style={{fontSize:13,color:t.textLight,marginBottom:5,display:"block"}}>부정행위 유형</label>
+              {btnGroup([
+                {v:"general",l:"일반 (20%)"},{v:"fraud",l:"부정 (40%)"},{v:"intl",l:"국제거래 부정 (60%)"}
+              ], noFilingType, setNoFilingType)}
+            </div>
+            <NumberInput t={t} label="무신고 납부세액" value={noFilingTax} onChange={setNoFilingTax} hint="※ 납부하였어야 할 세액 (산출세액 - 기납부세액)" />
+            <ReadonlyField t={t} label="무신고가산세" value={noFilingPenalty} sub={`${fmt(noFilingTax)} × ${noFilingRate}% = ${fmt(noFilingPenalty)}`} />
+            {filingType==="late"&&noFilingPenalty>0&&(
+              <div style={{padding:"10px 14px",background:t.summaryBg,borderRadius:10,border:"1px solid "+t.summaryBdr,marginTop:4}}>
+                <div style={{fontSize:13,color:t.accent}}>기한후신고 감면 적용 가능: {lateRedRate}% → 감면액 {fmt(noFilingReduction)}원</div>
+                <div style={{fontSize:15,fontWeight:700,color:t.resultGood,marginTop:4}}>감면 후: {fmt(noFilingPenalty - noFilingReduction)}원</div>
+              </div>
+            )}
+          </div></div>
+          {navBtns}
+        </Fragment>)}
+
+        {/* ═══ TAB 3: 과소신고가산세 ═══ */}
+        {tab==="under"&&(<Fragment>
+          <div style={card}><div style={cardH}><span>📉 과소신고가산세</span><span style={{fontSize:12,color:t.textLight}}>국기법 §47의3</span></div><div style={cardB}>
+            <FormulaBox t={t}
+              lines={[
+                "과소신고가산세 = (산출세액 - 기신고세액) × 가산세율",
+                `= (${fmt(assessedTax)} - ${fmt(reportedTax)}) × ${underRate}%`,
+                `= ${fmt(underTax)} × ${underRate}%`,
+              ]}
+              result={underPenalty}
+            />
+            <div className="field">
+              <label style={{fontSize:13,color:t.textLight,marginBottom:5,display:"block"}}>부정행위 유형</label>
+              {btnGroup([
+                {v:"general",l:"일반 (10%)"},{v:"fraud",l:"부정 (40%)"},{v:"intl",l:"국제거래 부정 (60%)"}
+              ], underType, setUnderType)}
+            </div>
+            <NumberInput t={t} label="산출세액 (결정세액)" value={assessedTax} onChange={setAssessedTax} hint="※ 정상적으로 신고했어야 할 세액" />
+            <NumberInput t={t} label="기신고 납부세액" value={reportedTax} onChange={setReportedTax} hint="※ 이미 신고·납부한 세액" />
+            <ReadonlyField t={t} label="과소신고 납부세액" value={underTax} sub={`${fmt(assessedTax)} - ${fmt(reportedTax)} = ${fmt(underTax)}`} />
+            <ReadonlyField t={t} label="과소신고가산세" value={underPenalty} sub={`${fmt(underTax)} × ${underRate}% = ${fmt(underPenalty)}`} />
+            {filingType==="amended"&&underPenalty>0&&(
+              <div style={{padding:"10px 14px",background:t.summaryBg,borderRadius:10,border:"1px solid "+t.summaryBdr,marginTop:4}}>
+                <div style={{fontSize:13,color:t.accent}}>수정신고 감면 적용 가능: {amendedRedRate}% → 감면액 {fmt(underReduction)}원</div>
+                <div style={{fontSize:15,fontWeight:700,color:t.resultGood,marginTop:4}}>감면 후: {fmt(underPenalty - underReduction)}원</div>
+              </div>
+            )}
+          </div></div>
+          {navBtns}
+        </Fragment>)}
+
+        {/* ═══ TAB 4: 납부지연가산세 ═══ */}
+        {tab==="late"&&(<Fragment>
+          <div style={card}><div style={cardH}><span>⏰ 납부지연가산세</span><span style={{fontSize:12,color:t.textLight}}>국기법 §47의5</span></div><div style={cardB}>
+            <FormulaBox t={t}
+              lines={[
+                "납부지연가산세 = 미납세액 × 경과일수 × 0.022%",
+                `= ${fmt(unpaidTax)} × ${paymentDays}일 × 0.022%`,
+                `= ${fmt(unpaidTax)} × ${paymentDays} × 0.00022`,
+              ]}
+              result={latePenalty}
+            />
+            <NumberInput t={t} label="미납·미달납부세액" value={unpaidTax} onChange={setUnpaidTax} hint="※ 납부기한까지 납부하지 않은 세액" />
+            <ReadonlyField t={t} label="납부기한 (법정신고기한)" value={fmtDate(legalDeadline)} />
+            <ReadonlyField t={t} label="납부일" value={actualPaymentDate?fmtDate(actualPaymentDate):"기본정보에서 입력"} color={!actualPaymentDate?t.resultWarn:undefined} />
+            <ReadonlyField t={t} label="경과일수" value={paymentDays+"일"} sub="납부기한 다음날 ~ 납부일" />
+            <ReadonlyField t={t} label="납부지연가산세" value={latePenalty} sub={`${fmt(unpaidTax)} × ${paymentDays}일 × 0.022% = ${fmt(latePenalty)}`} />
+            <div style={{padding:"10px 14px",background:t.formulaBg,borderRadius:10,border:"1px solid "+t.formulaBdr,marginTop:4}}>
+              <div style={{fontSize:12,color:t.textLight}}>※ 일일이율 0.022% (연 약 8.03%) — 국세기본법 시행령 기준</div>
+            </div>
+          </div></div>
+          {navBtns}
+        </Fragment>)}
+
+        {/* ═══ TAB 5: 영세율 ═══ */}
+        {tab==="zero"&&(<Fragment>
+          <div style={card}><div style={cardH}><span>🌐 영세율 과세표준 신고불성실</span><span style={{fontSize:12,color:t.textLight}}>부가세법 §60⑧</span></div><div style={cardB}>
+            <FormulaBox t={t}
+              lines={[
+                "가산세 = 미(과소)신고 영세율 과세표준 × 0.5%",
+                `= (${fmt(zeroBase)} - ${fmt(zeroReported)}) × 0.5%`,
+                `= ${fmt(zeroUnreported)} × 0.5%`,
+              ]}
+              result={zeroPenalty}
+            />
+            <NumberInput t={t} label="영세율 과세표준 (신고해야 할 금액)" value={zeroBase} onChange={setZeroBase} />
+            <NumberInput t={t} label="실제 신고한 영세율 과세표준" value={zeroReported} onChange={setZeroReported} />
+            <ReadonlyField t={t} label="미(과소)신고 과세표준" value={zeroUnreported} sub={`${fmt(zeroBase)} - ${fmt(zeroReported)} = ${fmt(zeroUnreported)}`} />
+            <ReadonlyField t={t} label="가산세" value={zeroPenalty} />
+            <div style={{padding:"10px 14px",background:t.formulaBg,borderRadius:10,border:"1px solid "+t.formulaBdr,marginTop:4}}>
+              <div style={{fontSize:12,color:t.textLight}}>※ 영세율(0%)은 세액이 0이므로, 과세표준 기준으로 가산세 부과</div>
+            </div>
+          </div></div>
+          {navBtns}
+        </Fragment>)}
+
+        {/* ═══ TAB 6: 미등록 ═══ */}
+        {tab==="unreg"&&(<Fragment>
+          <div style={card}><div style={cardH}><span>📝 사업자 미등록 가산세</span><span style={{fontSize:12,color:t.textLight}}>부가세법 §60①</span></div><div style={cardB}>
+            <FormulaBox t={t}
+              lines={[
+                "가산세 = 미등록 기간 공급가액 × 1%",
+                `= ${fmt(unregSupply)} × 1%`,
+              ]}
+              result={unregPenalty}
+            />
+            <NumberInput t={t} label="미등록 기간 공급가액" value={unregSupply} onChange={setUnregSupply} hint="※ 사업개시일부터 등록일 전일까지의 공급가액" />
+            <ReadonlyField t={t} label="가산세" value={unregPenalty} sub={`${fmt(unregSupply)} × 1% = ${fmt(unregPenalty)}`} />
+            <div style={{padding:"10px 14px",background:t.formulaBg,borderRadius:10,border:"1px solid "+t.formulaBdr,marginTop:4}}>
+              <div style={{fontSize:12,color:t.textLight}}>※ 사업개시일로부터 20일 이내 미등록 또는 타인 명의 등록 시 적용</div>
+            </div>
+          </div></div>
+          {navBtns}
+        </Fragment>)}
+
+        {/* ═══ TAB 7: 세금계산서 ═══ */}
+        {tab==="inv"&&(<Fragment>
+          <div style={card}><div style={cardH}><span>🧾 세금계산서 관련 가산세</span><button onClick={addInv} style={{padding:"6px 12px",fontSize:13,background:t.primaryGrad,color:"#fff",border:"none",borderRadius:8,cursor:"pointer"}}>+ 추가</button></div><div style={cardB}>
+            <FormulaBox t={t}
+              lines={["가산세 = 공급가액 × 가산세율 (유형별)"]}
+              result={totalInvPenalty}
+              resultLabel="합계 ="
+            />
+            <div style={{overflowX:"auto",marginBottom:12}}>
+              <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,marginBottom:8}}>
+                <thead><tr>
+                  <th style={{padding:"6px 8px",textAlign:"left",borderBottom:"2px solid "+t.cardBdr,color:t.textLight}}>유형</th>
+                  <th style={{padding:"6px 8px",textAlign:"center",borderBottom:"2px solid "+t.cardBdr,color:t.textLight}}>가산세율</th>
+                </tr></thead>
+                <tbody>{INV_TYPES.map(iv=>(
+                  <tr key={iv.key}><td style={{padding:"4px 8px",borderBottom:"1px solid "+t.rowBdr}}>{iv.label}</td>
+                  <td style={{padding:"4px 8px",borderBottom:"1px solid "+t.rowBdr,textAlign:"center",fontWeight:600}}>{iv.rate}%</td></tr>
+                ))}</tbody>
+              </table>
+            </div>
+            {invItems.map((item,i)=>{
+              const def=INV_TYPES.find(x=>x.key===item.type);
+              const pen=Math.floor(item.amount*(def?.rate||0)/100);
+              return (<div key={item.id} style={{padding:"12px 0",borderBottom:i<invItems.length-1?"1px solid "+t.rowBdr:"none"}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+                  <select value={item.type} onChange={e=>updInv(item.id,"type",e.target.value)} style={{flex:1,padding:"10px 12px",border:"1px solid "+t.inputBdr,borderRadius:10,fontSize:14,background:"#fff"}}>
+                    {INV_TYPES.map(iv=><option key={iv.key} value={iv.key}>{iv.label} ({iv.rate}%)</option>)}
+                  </select>
+                  {invItems.length>1&&<button onClick={()=>delInv(item.id)} style={{padding:"8px 12px",fontSize:13,background:t.accentLight,color:t.resultBad,border:"none",borderRadius:8,cursor:"pointer"}}>삭제</button>}
+                </div>
+                <NumberInput t={t} label="공급가액" value={item.amount} onChange={v=>updInv(item.id,"amount",v)} />
+                {item.amount>0&&<div style={{fontSize:13,color:t.accent,textAlign:"right",marginTop:-8,marginBottom:8}}>→ {fmt(item.amount)} × {def?.rate}% = <strong>{fmt(pen)}</strong>원</div>}
+              </div>);
+            })}
+            {totalInvPenalty>0&&<div style={{padding:"12px 14px",background:t.summaryBg,borderRadius:10,border:"1px solid "+t.summaryBdr,marginTop:8}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <span style={{fontSize:14,fontWeight:600,color:t.accent}}>세금계산서 가산세 합계</span>
+                <span style={{fontSize:18,fontWeight:700,color:t.accent}}>{fmt(totalInvPenalty)}</span>
+              </div>
+            </div>}
+          </div></div>
+          {navBtns}
+        </Fragment>)}
+
+        {/* ═══ TAB 8: 감면 ═══ */}
+        {tab==="reduce"&&(<Fragment>
+          <div style={card}><div style={cardH}><span>💡 가산세 감면</span><span style={{fontSize:12,color:t.textLight}}>국기법 §48</span></div><div style={cardB}>
+            <div style={{...rw,borderBottom:"2px solid "+t.cardBdr}}>
+              <span>신고유형</span>
+              <span style={{fontWeight:700,color:t.accent}}>{filingType==="regular"?"정기신고":filingType==="amended"?"수정신고":"기한후신고"}</span>
+            </div>
+            <div style={rw}><span>법정신고기한</span><span style={{fontWeight:600}}>{fmtDate(legalDeadline)}</span></div>
+            <div style={rw}><span>실제 신고일</span><span style={{fontWeight:600}}>{actualFilingDate?fmtDate(actualFilingDate):"미입력"}</span></div>
+            <div style={{...rw,marginBottom:16}}><span>경과일수</span><span style={{fontWeight:700,fontSize:18,color:t.accent}}>{filingDays}일</span></div>
+
+            {filingType==="amended"&&(<div style={{marginBottom:16}}>
+              <div style={{fontWeight:600,fontSize:14,marginBottom:8,color:t.text}}>수정신고 감면 (과소신고가산세)</div>
+              <table className="tier-table">
+                <thead><tr style={{background:t.tierBg}}>
+                  <th style={{borderColor:t.cardBdr}}>경과기간</th><th style={{borderColor:t.cardBdr}}>감면율</th>
+                </tr></thead>
+                <tbody>{AMENDED_TIERS.map(tier=>{
+                  const active = filingDays>0 && filingDays<=(tier.days) && (AMENDED_TIERS.indexOf(tier)===0 || filingDays>AMENDED_TIERS[AMENDED_TIERS.indexOf(tier)-1].days);
+                  return (<tr key={tier.label} style={{background:active?t.tierActiveBg:"transparent"}}>
+                    <td style={{borderColor:t.cardBdr,fontWeight:active?700:400}}>{tier.label}</td>
+                    <td style={{borderColor:t.cardBdr,fontWeight:active?700:400,color:active?t.resultGood:t.text}}>{tier.rate}%{active&&" ←"}</td>
+                  </tr>);
+                })}</tbody>
+              </table>
+              {underPenalty>0&&amendedRedRate>0&&(
+                <FormulaBox t={t}
+                  lines={[
+                    `감면액 = 과소신고가산세 × 감면율`,
+                    `= ${fmt(underPenalty)} × ${amendedRedRate}%`,
+                  ]}
+                  result={underReduction}
+                  resultLabel="감면액 ="
+                />
+              )}
+              {underPenalty>0&&amendedRedRate>0&&(
+                <div style={{padding:"12px 14px",background:t.okBg,borderRadius:10,border:"1px solid "+t.okBdr}}>
+                  <div style={{fontSize:13,color:t.okTxt}}>감면 후 과소신고가산세</div>
+                  <div style={{fontSize:20,fontWeight:700,color:t.resultGood}}>{fmt(underPenalty - underReduction)}원</div>
+                </div>
+              )}
+              {underPenalty===0&&<div style={{padding:"10px 14px",background:t.formulaBg,borderRadius:10,border:"1px solid "+t.formulaBdr,fontSize:13,color:t.textLight}}>과소신고가산세가 0원이므로 감면 해당 없음</div>}
+            </div>)}
+
+            {filingType==="late"&&(<div style={{marginBottom:16}}>
+              <div style={{fontWeight:600,fontSize:14,marginBottom:8,color:t.text}}>기한후신고 감면 (무신고가산세)</div>
+              <table className="tier-table">
+                <thead><tr style={{background:t.tierBg}}>
+                  <th style={{borderColor:t.cardBdr}}>경과기간</th><th style={{borderColor:t.cardBdr}}>감면율</th>
+                </tr></thead>
+                <tbody>{LATE_TIERS.map(tier=>{
+                  const active = filingDays>0 && filingDays<=(tier.days) && (LATE_TIERS.indexOf(tier)===0 || filingDays>LATE_TIERS[LATE_TIERS.indexOf(tier)-1].days);
+                  return (<tr key={tier.label} style={{background:active?t.tierActiveBg:"transparent"}}>
+                    <td style={{borderColor:t.cardBdr,fontWeight:active?700:400}}>{tier.label}</td>
+                    <td style={{borderColor:t.cardBdr,fontWeight:active?700:400,color:active?t.resultGood:t.text}}>{tier.rate}%{active&&" ←"}</td>
+                  </tr>);
+                })}</tbody>
+              </table>
+              {filingDays>180&&<div style={{padding:"10px 14px",background:t.warnBg,borderRadius:10,border:"1px solid "+t.warnBdr,fontSize:13,color:t.warnTxt,marginTop:8}}>※ 기한후신고 감면은 6개월(180일)까지만 적용됩니다</div>}
+              {noFilingPenalty>0&&lateRedRate>0&&(
+                <FormulaBox t={t}
+                  lines={[
+                    `감면액 = 무신고가산세 × 감면율`,
+                    `= ${fmt(noFilingPenalty)} × ${lateRedRate}%`,
+                  ]}
+                  result={noFilingReduction}
+                  resultLabel="감면액 ="
+                />
+              )}
+              {noFilingPenalty>0&&lateRedRate>0&&(
+                <div style={{padding:"12px 14px",background:t.okBg,borderRadius:10,border:"1px solid "+t.okBdr}}>
+                  <div style={{fontSize:13,color:t.okTxt}}>감면 후 무신고가산세</div>
+                  <div style={{fontSize:20,fontWeight:700,color:t.resultGood}}>{fmt(noFilingPenalty - noFilingReduction)}원</div>
+                </div>
+              )}
+              {noFilingPenalty===0&&<div style={{padding:"10px 14px",background:t.formulaBg,borderRadius:10,border:"1px solid "+t.formulaBdr,fontSize:13,color:t.textLight}}>무신고가산세가 0원이므로 감면 해당 없음</div>}
+            </div>)}
+
+            {filingType==="regular"&&(
+              <div style={{padding:"14px",background:t.formulaBg,borderRadius:10,border:"1px solid "+t.formulaBdr}}>
+                <div style={{fontSize:14,color:t.textLight}}>정기신고는 수정신고·기한후신고 감면 대상이 아닙니다.</div>
+                <div style={{fontSize:12,color:t.hint,marginTop:4}}>※ 기본정보 탭에서 신고유형을 변경하세요</div>
+              </div>
+            )}
+
+            <div style={{padding:"10px 14px",background:t.warnBg,borderRadius:10,border:"1px solid "+t.warnBdr,marginTop:12}}>
+              <div style={{fontSize:12,color:t.warnTxt,lineHeight:1.6}}>
+                ※ 과세표준과 세액을 경정(결정)할 것을 미리 알고 제출한 경우 감면 불가<br/>
+                ※ 세무조사 통지 후 수정신고는 감면 불가
+              </div>
+            </div>
+          </div></div>
+          {navBtns}
+        </Fragment>)}
+
+        {/* ═══ TAB 9: 요약·출력 ═══ */}
+        {tab==="summary"&&(<Fragment>
+          <div style={card}><div style={cardH}><span>📊 가산세 합계</span></div><div style={cardB}>
+            {/* 기본정보 요약 */}
+            <div style={{padding:"10px 14px",background:t.formulaBg,borderRadius:10,border:"1px solid "+t.formulaBdr,marginBottom:16,fontSize:13}}>
+              <div style={{display:"flex",justifyContent:"space-between"}}><span style={{color:t.textLight}}>과세기간</span><span>{taxYear}년 {PERIODS.find(p=>p.key===taxPeriod)?.label}</span></div>
+              <div style={{display:"flex",justifyContent:"space-between",marginTop:4}}><span style={{color:t.textLight}}>법정신고기한</span><span>{fmtDate(legalDeadline)}</span></div>
+              <div style={{display:"flex",justifyContent:"space-between",marginTop:4}}><span style={{color:t.textLight}}>신고유형</span><span style={{fontWeight:600}}>{filingType==="regular"?"정기신고":filingType==="amended"?"수정신고":"기한후신고"}</span></div>
+            </div>
+
+            {/* 가산세 테이블 */}
+            <div style={{overflowX:"auto"}}>
+              <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+                <thead>
+                  <tr style={{background:t.tierBg}}>
+                    <th style={{padding:"10px 8px",textAlign:"left",borderBottom:"2px solid "+t.cardBdr,color:t.textLight}}>가산세 종류</th>
+                    <th style={{padding:"10px 8px",textAlign:"right",borderBottom:"2px solid "+t.cardBdr,color:t.textLight}}>산출액</th>
+                    <th style={{padding:"10px 8px",textAlign:"right",borderBottom:"2px solid "+t.cardBdr,color:t.textLight}}>감면</th>
+                    <th style={{padding:"10px 8px",textAlign:"right",borderBottom:"2px solid "+t.cardBdr,color:t.textLight}}>납부할 금액</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {penalties.map(p=>(
+                    <tr key={p.name} style={{opacity:p.before===0?.4:1}}>
+                      <td style={{padding:"8px",borderBottom:"1px solid "+t.rowBdr}}>{p.name}</td>
+                      <td style={{padding:"8px",borderBottom:"1px solid "+t.rowBdr,textAlign:"right",fontVariantNumeric:"tabular-nums"}}>{fmt(p.before)}</td>
+                      <td style={{padding:"8px",borderBottom:"1px solid "+t.rowBdr,textAlign:"right",fontVariantNumeric:"tabular-nums",color:p.reduction>0?t.resultGood:t.textLight}}>{p.reduction>0?"-"+fmt(p.reduction):"-"}</td>
+                      <td style={{padding:"8px",borderBottom:"1px solid "+t.rowBdr,textAlign:"right",fontWeight:600,fontVariantNumeric:"tabular-nums"}}>{fmt(p.after)}</td>
+                    </tr>
+                  ))}
+                  <tr style={{fontWeight:700,background:t.summaryBg}}>
+                    <td style={{padding:"10px 8px",borderTop:"2px solid "+t.cardBdr}}>합계</td>
+                    <td style={{padding:"10px 8px",borderTop:"2px solid "+t.cardBdr,textAlign:"right",fontVariantNumeric:"tabular-nums"}}>{fmt(totalBefore)}</td>
+                    <td style={{padding:"10px 8px",borderTop:"2px solid "+t.cardBdr,textAlign:"right",fontVariantNumeric:"tabular-nums",color:totalReduction>0?t.resultGood:t.textLight}}>{totalReduction>0?"-"+fmt(totalReduction):"-"}</td>
+                    <td style={{padding:"10px 8px",borderTop:"2px solid "+t.cardBdr,textAlign:"right",fontSize:16,fontVariantNumeric:"tabular-nums",color:t.accent}}>{fmt(totalAfter)}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            {/* 최종 납부 가산세 */}
+            <div style={{marginTop:16,padding:"16px",background:totalAfter>0?t.accentLight:t.okBg,borderRadius:12,border:"1.5px solid "+(totalAfter>0?t.cardBdr:t.okBdr),textAlign:"center"}}>
+              <div style={{fontSize:13,color:t.textLight,marginBottom:6}}>최종 납부할 가산세 합계</div>
+              <div style={{fontSize:28,fontWeight:700,color:totalAfter>0?t.resultBad:t.resultGood,fontVariantNumeric:"tabular-nums"}}>{fmt(totalAfter)}원</div>
+              {totalReduction>0&&<div style={{fontSize:12,color:t.resultGood,marginTop:4}}>감면 적용: -{fmt(totalReduction)}원</div>}
+            </div>
+
+            {/* 활성 가산세 상세 */}
+            {activePenalties.length>0&&(<div style={{marginTop:16}}>
+              <div style={{fontSize:14,fontWeight:600,color:t.text,marginBottom:8}}>상세 내역</div>
+              {noFilingPenalty>0&&<div style={{...rw,fontSize:13}}><span>무신고: {fmt(noFilingTax)} × {noFilingRate}%</span><span>{fmt(noFilingPenalty)}{noFilingReduction>0&&<span style={{color:t.resultGood}}> (-{fmt(noFilingReduction)})</span>}</span></div>}
+              {underPenalty>0&&<div style={{...rw,fontSize:13}}><span>과소신고: {fmt(underTax)} × {underRate}%</span><span>{fmt(underPenalty)}{underReduction>0&&<span style={{color:t.resultGood}}> (-{fmt(underReduction)})</span>}</span></div>}
+              {latePenalty>0&&<div style={{...rw,fontSize:13}}><span>납부지연: {fmt(unpaidTax)} × {paymentDays}일 × 0.022%</span><span>{fmt(latePenalty)}</span></div>}
+              {zeroPenalty>0&&<div style={{...rw,fontSize:13}}><span>영세율: {fmt(zeroUnreported)} × 0.5%</span><span>{fmt(zeroPenalty)}</span></div>}
+              {unregPenalty>0&&<div style={{...rw,fontSize:13}}><span>미등록: {fmt(unregSupply)} × 1%</span><span>{fmt(unregPenalty)}</span></div>}
+              {totalInvPenalty>0&&<div style={{...rw,fontSize:13}}><span>세금계산서 ({invCalc.filter(i=>i.penalty>0).length}건)</span><span>{fmt(totalInvPenalty)}</span></div>}
+            </div>)}
+
+            {/* 엑셀 출력 */}
+            <button onClick={exportExcel} style={{display:"flex",alignItems:"center",justifyContent:"center",gap:8,width:"100%",padding:"14px",marginTop:20,background:t.primaryGrad,color:"#fff",border:"none",borderRadius:12,fontSize:15,fontWeight:600,cursor:"pointer"}}>
+              📥 엑셀 다운로드 (.xlsx)
+            </button>
+          </div></div>
+
+          <div className="nav-area" style={{marginTop:8,marginBottom:20}}>
+            <button className="nav-btn" style={{background:t.navSecBg,color:t.navSecTxt}} onClick={goPrev}>← 이전</button>
+          </div>
+          {t.showKitty&&<div className="kitty-deco" style={{textAlign:"center",opacity:.12,marginBottom:20}}><KittyFace size={50} color={t.primary}/></div>}
+        </Fragment>)}
+      </div>
+
+      {/* Bottom tabs */}
+      <div className="bottom-tabs" style={{background:t.bottomTabBg,borderTop:"1.5px solid "+t.bottomTabBdr}}>
+        {TABS.map(x=>(<button key={x.key} onClick={()=>setTab(x.key)} style={{color:tab===x.key?t.bottomTabActive:t.bottomTabInactive,fontWeight:tab===x.key?700:400}}><span className="tab-icon">{x.icon}</span>{x.short}</button>))}
+      </div>
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
