@@ -89,7 +89,7 @@ const LATE_TIERS = [
 
 /* ═══ 세금계산서 유형 (사유 포함) ═══ */
 const INV_TYPES = [
-  {key:"notIssued",label:"미발급",rate:2,desc:"세금계산서를 발급하지 않은 경우"},
+  {key:"notIssued",label:"미발급",rate:2,desc:"확정신고기한이 지난 후 발급하거나 미발급한 경우"},
   {key:"lateIssued",label:"지연발급",rate:1,desc:"공급시기가 속하는 과세기간의 확정신고기한까지 발급한 경우"},
   {key:"fake",label:"가공(위장) 발급",rate:2,desc:"실물거래 없이 허위로 세금계산서를 발급한 경우"},
   {key:"fakeRcv",label:"가공(위장) 수취",rate:3,desc:"실물거래 없이 허위 세금계산서를 수취한 경우"},
