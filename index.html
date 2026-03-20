@@ -270,139 +270,238 @@ function App() {
   const totalReduction = penalties.reduce((s,p)=>s+p.reduction,0);
   const totalAfter = penalties.reduce((s,p)=>s+p.after,0);
 
-  /* ═══ 엑셀 출력 (수식 연결 + 스타일) ═══ */
+  /* ═══ 엑셀 출력 (전 과정 수식 연결 + 스타일) ═══ */
   const exportExcel = () => {
     const pInfo = PERIODS.find(x=>x.key===taxPeriod);
     const wb = XLSX.utils.book_new();
     const ws = {};
+    const merges = [];
 
     // 스타일 정의
     const BLUE = "1565C0";
+    const MBLUE = "1E88E5";
     const LBLUE = "E3F2FD";
     const WHITE = "FFFFFF";
     const DARK = "212121";
+    const GRAY = "F5F5F5";
     const thinBorder = {style:"thin",color:{rgb:"B0BEC5"}};
     const borders = {top:thinBorder,bottom:thinBorder,left:thinBorder,right:thinBorder};
 
     const sTitle = {font:{bold:true,sz:16,color:{rgb:WHITE}},fill:{fgColor:{rgb:BLUE}},alignment:{horizontal:"center",vertical:"center"}};
-    const sHeader = {font:{bold:true,sz:11,color:{rgb:WHITE}},fill:{fgColor:{rgb:BLUE}},alignment:{horizontal:"center",vertical:"center"},border:borders};
+    const sHeader = {font:{bold:true,sz:10,color:{rgb:WHITE}},fill:{fgColor:{rgb:BLUE}},alignment:{horizontal:"center",vertical:"center"},border:borders};
+    const sSubHeader = {font:{bold:true,sz:10,color:{rgb:WHITE}},fill:{fgColor:{rgb:MBLUE}},alignment:{horizontal:"center",vertical:"center"},border:borders};
     const sLabelBg = {font:{bold:true,sz:10,color:{rgb:DARK}},fill:{fgColor:{rgb:LBLUE}},alignment:{horizontal:"left",vertical:"center"},border:borders};
     const sLabel = {font:{bold:true,sz:10,color:{rgb:DARK}},alignment:{horizontal:"left",vertical:"center"},border:borders};
     const sVal = {font:{sz:10,color:{rgb:DARK}},alignment:{horizontal:"right",vertical:"center"},numFmt:"#,##0",border:borders};
     const sValC = {font:{sz:10,color:{rgb:DARK}},alignment:{horizontal:"center",vertical:"center"},border:borders};
-    const sPct = {font:{sz:10,color:{rgb:DARK}},alignment:{horizontal:"center",vertical:"center"},numFmt:"0%",border:borders};
+    const sPct = {font:{sz:10,color:{rgb:DARK}},alignment:{horizontal:"center",vertical:"center"},numFmt:"0.0%",border:borders};
+    const sFormula = {font:{sz:10,color:{rgb:"1565C0"}},alignment:{horizontal:"center",vertical:"center"},border:borders};
+    const sResult = {font:{bold:true,sz:11,color:{rgb:BLUE}},alignment:{horizontal:"right",vertical:"center"},numFmt:"#,##0",border:borders,fill:{fgColor:{rgb:LBLUE}}};
     const sTotalLabel = {font:{bold:true,sz:11,color:{rgb:WHITE}},fill:{fgColor:{rgb:BLUE}},alignment:{horizontal:"center",vertical:"center"},border:borders};
     const sTotalVal = {font:{bold:true,sz:11,color:{rgb:WHITE}},fill:{fgColor:{rgb:BLUE}},alignment:{horizontal:"right",vertical:"center"},numFmt:"#,##0",border:borders};
-    const sTotalPct = {font:{bold:true,sz:11,color:{rgb:WHITE}},fill:{fgColor:{rgb:BLUE}},alignment:{horizontal:"center",vertical:"center"},numFmt:"0%",border:borders};
-    const sSection = {font:{bold:true,sz:10,color:{rgb:BLUE}},alignment:{horizontal:"left"}};
-    const sEmpty = {};
+    const sSection = {font:{bold:true,sz:11,color:{rgb:WHITE}},fill:{fgColor:{rgb:MBLUE}},alignment:{horizontal:"left",vertical:"center"},border:borders};
+    const sDesc = {font:{sz:9,color:{rgb:"616161"}},alignment:{horizontal:"left",vertical:"center",wrapText:true},border:borders};
+    const sEmpty = {border:borders};
 
     const sc = (ref,v,s,type) => { ws[ref]={v:v,s:s||sEmpty}; if(type) ws[ref].t=type; };
     const sf = (ref,formula,s) => { ws[ref]={f:formula,s:s||sVal,t:'n'}; };
+    const mg = (r1,c1,r2,c2) => { merges.push({s:{r:r1,c:c1},e:{r:r2,c:c2}}); };
 
-    // Row 1: 타이틀
+    // ────────────────────────────────────────
+    // SECTION 1: 타이틀 (Row 1)
+    // ────────────────────────────────────────
     sc("A1","부가가치세 가산세 계산서",sTitle,"s");
-    ws["!merges"]=[{s:{r:0,c:0},e:{r:0,c:4}}];
+    mg(0,0,0,4);
 
-    // Row 3-6: 기본정보
+    // ────────────────────────────────────────
+    // SECTION 2: 기본정보 (Row 3~6)
+    // ────────────────────────────────────────
     sc("A3","과세기간",sLabelBg,"s"); sc("B3",pInfo?.label||"",sValC,"s"); sc("D3","귀속연도",sLabelBg,"s"); sc("E3",taxYear,sValC,"s");
     sc("A4","법정신고기한",sLabelBg,"s"); sc("B4",fmtDate(legalDeadline),sValC,"s"); sc("D4","신고유형",sLabelBg,"s"); sc("E4",filingType==="regular"?"정기신고":filingType==="amended"?"수정신고":"기한후신고",sValC,"s");
     const corrLabel = filingType==="amended"?"수정신고일":"기한후신고일";
     sc("A5",corrLabel,sLabelBg,"s"); sc("B5",fmtDate(correctionDate),sValC,"s"); sc("D5","실제 납부일",sLabelBg,"s"); sc("E5",fmtDate(actualPaymentDate),sValC,"s");
-    sc("A6","감면 경과일수",sLabelBg,"s"); sc("B6",reductionDays+"일",sValC,"s"); sc("D6","적용 감면율",sLabelBg,"s"); sc("E6",activeRedRate+"%",sValC,"s");
+    sc("A6","감면 경과일수",sLabelBg,"s"); sc("B6",reductionDays,sVal,"n"); sc("C6","일",sValC,"s"); sc("D6","적용 감면율",sLabelBg,"s"); sc("E6",activeRedRate/100,sPct,"n");
 
-    // Row 8: 헤더
-    sc("A8","가산세 종류",sHeader,"s"); sc("B8","산출 가산세",sHeader,"s"); sc("C8","감면율",sHeader,"s"); sc("D8","감면액",sHeader,"s"); sc("E8","납부할 가산세",sHeader,"s");
+    // ────────────────────────────────────────
+    // SECTION 3: 산출내역 (Row 8~)
+    // 각 가산세별 상세 계산 과정
+    // ────────────────────────────────────────
+    let r = 8;
 
-    // Row 9-13: 데이터 (수식 연결)
-    const rows = [
-      {r:9, name:penaltyLabel, val:penaltyBefore, redRate:activeRedRate/100},
-      {r:10, name:"납부지연가산세", val:latePenalty, redRate:0},
-      {r:11, name:"영세율 신고불성실", val:zeroPenalty, redRate:0},
-      {r:12, name:"사업자 미등록", val:unregPenalty, redRate:0},
-      {r:13, name:"세금계산서 관련", val:totalInvPenalty, redRate:0},
-    ];
-    rows.forEach(({r,name,val,redRate})=>{
-      sc("A"+r, name, sLabel, "s");
-      sc("B"+r, val, sVal, "n");
-      sc("C"+r, redRate, sPct, "n");
-      sf("D"+r, `ROUND(B${r}*C${r},0)`, sVal);
-      sf("E"+r, `B${r}-D${r}`, sVal);
-    });
+    // ── 1. 무신고/과소신고 ──
+    sc("A"+r, `1. ${penaltyLabel} 산출내역`, sSection, "s");
+    sc("B"+r,"",sSection,"s"); sc("C"+r,"",sSection,"s"); sc("D"+r,"",sSection,"s"); sc("E"+r,"",sSection,"s");
+    mg(r-1,0,r-1,4); r++;
 
-    // Row 15: 합계 (SUM 수식)
-    sc("A15","합  계",sTotalLabel,"s");
-    sf("B15","SUM(B9:B13)",sTotalVal);
-    sc("C15","",sTotalPct,"s");
-    sf("D15","SUM(D9:D13)",sTotalVal);
-    sf("E15","SUM(E9:E13)",sTotalVal);
-
-    // Row 17+: 상세 내역
-    let row = 17;
-    // 무신고/과소신고 상세
-    sc("A"+row, `[${penaltyLabel} 상세]`, sSection, "s"); row++;
+    let penaltyResultRef;
     if(penaltyType==="nofile"){
-      sc("A"+row,"무신고 납부세액",sLabelBg,"s"); sc("B"+row,noFilingTax,sVal,"n");
-      sc("D"+row,"가산세율",sLabelBg,"s"); sc("E"+row,noFilingRate+"%",sValC,"s"); row++;
-      sc("A"+row,"가산세액",sLabelBg,"s"); sf("B"+row,`B${row-1}*${noFilingRate}/100`,sVal); row++;
+      sc("A"+r,"항목",sSubHeader,"s"); sc("B"+r,"금액",sSubHeader,"s"); sc("C"+r,"",sSubHeader,"s"); sc("D"+r,"산식",sSubHeader,"s"); sc("E"+r,"비고",sSubHeader,"s"); r++;
+      const rTax=r;
+      sc("A"+r,"무신고 납부세액",sLabelBg,"s"); sc("B"+r,noFilingTax,sVal,"n"); sc("C"+r,"",sEmpty,"s");
+      sc("D"+r,"직접 입력",sFormula,"s"); sc("E"+r,noFilingFraud==="general"?"일반 무신고":noFilingFraud==="fraud"?"부정 무신고":"국제거래 부정",sValC,"s"); r++;
+      sc("A"+r,"가산세율",sLabelBg,"s"); sc("B"+r,noFilingRate/100,sPct,"n"); sc("C"+r,"",sEmpty,"s");
+      sc("D"+r,noFilingRate+"%",sFormula,"s"); sc("E"+r,"",sEmpty,"s"); r++;
+      penaltyResultRef = "B"+r;
+      sc("A"+r,`${penaltyLabel}`,sLabelBg,"s"); sf("B"+r,`ROUND(B${rTax}*B${rTax+1},0)`,sResult);
+      sc("C"+r,"",sEmpty,"s"); sc("D"+r,`=B${rTax} × B${rTax+1}`,sFormula,"s"); sc("E"+r,"→ 요약표 반영",sDesc,"s"); r++;
     } else {
-      sc("A"+row,"산출세액(결정세액)",sLabelBg,"s"); sc("B"+row,assessedTax,sVal,"n");
-      sc("D"+row,"기신고 납부세액",sLabelBg,"s"); sc("E"+row,reportedTax,sVal,"n"); row++;
-      sc("A"+row,"과소신고 납부세액",sLabelBg,"s"); sf("B"+row,`B${row-1}-E${row-1}`,sVal);
-      sc("D"+row,"가산세율",sLabelBg,"s"); sc("E"+row,underRate+"%",sValC,"s"); row++;
-      sc("A"+row,"가산세액",sLabelBg,"s"); sf("B"+row,`B${row-1}*${underRate}/100`,sVal); row++;
+      sc("A"+r,"항목",sSubHeader,"s"); sc("B"+r,"금액",sSubHeader,"s"); sc("C"+r,"",sSubHeader,"s"); sc("D"+r,"산식",sSubHeader,"s"); sc("E"+r,"비고",sSubHeader,"s"); r++;
+      const rAssessed=r;
+      sc("A"+r,"산출세액 (결정세액)",sLabelBg,"s"); sc("B"+r,assessedTax,sVal,"n"); sc("C"+r,"",sEmpty,"s");
+      sc("D"+r,"직접 입력",sFormula,"s"); sc("E"+r,"정상 신고했어야 할 세액",sDesc,"s"); r++;
+      sc("A"+r,"기신고 납부세액",sLabelBg,"s"); sc("B"+r,reportedTax,sVal,"n"); sc("C"+r,"",sEmpty,"s");
+      sc("D"+r,"직접 입력",sFormula,"s"); sc("E"+r,"이미 신고·납부한 세액",sDesc,"s"); r++;
+      const rUnder=r;
+      sc("A"+r,"과소신고 납부세액",sLabelBg,"s"); sf("B"+r,`B${rAssessed}-B${rAssessed+1}`,sVal);
+      sc("C"+r,"",sEmpty,"s"); sc("D"+r,`=B${rAssessed}-B${rAssessed+1}`,sFormula,"s"); sc("E"+r,"산출-기신고",sDesc,"s"); r++;
+      sc("A"+r,"가산세율",sLabelBg,"s"); sc("B"+r,underRate/100,sPct,"n"); sc("C"+r,"",sEmpty,"s");
+      sc("D"+r,underRate+"%",sFormula,"s"); sc("E"+r,underFraud==="general"?"일반 과소신고":underFraud==="fraud"?"부정 과소신고":"국제거래 부정",sValC,"s"); r++;
+      penaltyResultRef = "B"+r;
+      sc("A"+r,`${penaltyLabel}`,sLabelBg,"s"); sf("B"+r,`ROUND(B${rUnder}*B${rUnder+1},0)`,sResult);
+      sc("C"+r,"",sEmpty,"s"); sc("D"+r,`=B${rUnder} × B${rUnder+1}`,sFormula,"s"); sc("E"+r,"→ 요약표 반영",sDesc,"s"); r++;
     }
-    row++;
+    r++;
 
-    // 납부지연 상세
-    if(latePenalty>0){
-      sc("A"+row,"[납부지연가산세 상세]",sSection,"s"); row++;
-      sc("A"+row,"미납세액",sLabelBg,"s"); sc("B"+row,unpaidTax,sVal,"n");
-      sc("D"+row,"경과일수",sLabelBg,"s"); sc("E"+row,paymentDays,sVal,"n"); row++;
-      sc("A"+row,"일일이율",sLabelBg,"s"); sc("B"+row,"0.022%",sValC,"s");
-      sc("D"+row,"가산세액",sLabelBg,"s"); sf("E"+row,`ROUND(B${row-1}*E${row-1}*0.00022,0)`,sVal); row++;
-      row++;
-    }
+    // ── 2. 납부지연가산세 ──
+    sc("A"+r,"2. 납부지연가산세 산출내역",sSection,"s");
+    sc("B"+r,"",sSection,"s"); sc("C"+r,"",sSection,"s"); sc("D"+r,"",sSection,"s"); sc("E"+r,"",sSection,"s");
+    mg(r-1,0,r-1,4); r++;
+    sc("A"+r,"항목",sSubHeader,"s"); sc("B"+r,"금액",sSubHeader,"s"); sc("C"+r,"",sSubHeader,"s"); sc("D"+r,"산식",sSubHeader,"s"); sc("E"+r,"비고",sSubHeader,"s"); r++;
+    const rUnpaid=r;
+    sc("A"+r,"미납·미달납부세액",sLabelBg,"s"); sc("B"+r,unpaidTax,sVal,"n"); sc("C"+r,"",sEmpty,"s");
+    sc("D"+r,"직접 입력",sFormula,"s"); sc("E"+r,unpaidAutoSync?`${penaltyType==="nofile"?"무신고":"과소신고"} 납부세액 연동`:"수동 입력",sDesc,"s"); r++;
+    sc("A"+r,"경과일수",sLabelBg,"s"); sc("B"+r,paymentDays,sVal,"n"); sc("C"+r,"일",sValC,"s");
+    sc("D"+r,"납부기한→납부일",sFormula,"s"); sc("E"+r,`${fmtDate(legalDeadline)} → ${fmtDate(actualPaymentDate)}`,sDesc,"s"); r++;
+    sc("A"+r,"일일이율",sLabelBg,"s"); sc("B"+r,0.00022,{...sPct,numFmt:"0.000%"},"n"); sc("C"+r,"",sEmpty,"s");
+    sc("D"+r,"0.022%/일",sFormula,"s"); sc("E"+r,"연 약 8.03%",sDesc,"s"); r++;
+    const lateResultRef = "B"+r;
+    sc("A"+r,"납부지연가산세",sLabelBg,"s"); sf("B"+r,`ROUND(B${rUnpaid}*B${rUnpaid+1}*B${rUnpaid+2},0)`,sResult);
+    sc("C"+r,"",sEmpty,"s"); sc("D"+r,`=B${rUnpaid}×B${rUnpaid+1}×B${rUnpaid+2}`,sFormula,"s"); sc("E"+r,"→ 요약표 반영",sDesc,"s"); r++;
+    r++;
 
-    // 영세율 상세
-    if(zeroPenalty>0){
-      sc("A"+row,"[영세율 과세표준 신고불성실 상세]",sSection,"s"); row++;
-      sc("A"+row,"영세율 과세표준",sLabelBg,"s"); sc("B"+row,zeroBase,sVal,"n");
-      sc("D"+row,"신고 과세표준",sLabelBg,"s"); sc("E"+row,zeroReported,sVal,"n"); row++;
-      sc("A"+row,"미신고 과세표준",sLabelBg,"s"); sf("B"+row,`B${row-1}-E${row-1}`,sVal);
-      sc("D"+row,"가산세(×0.5%)",sLabelBg,"s"); sf("E"+row,`ROUND(B${row}*0.005,0)`,sVal); row++;
-      row++;
-    }
+    // ── 3. 영세율 ──
+    sc("A"+r,"3. 영세율 과세표준 신고불성실 산출내역",sSection,"s");
+    sc("B"+r,"",sSection,"s"); sc("C"+r,"",sSection,"s"); sc("D"+r,"",sSection,"s"); sc("E"+r,"",sSection,"s");
+    mg(r-1,0,r-1,4); r++;
+    sc("A"+r,"항목",sSubHeader,"s"); sc("B"+r,"금액",sSubHeader,"s"); sc("C"+r,"",sSubHeader,"s"); sc("D"+r,"산식",sSubHeader,"s"); sc("E"+r,"비고",sSubHeader,"s"); r++;
+    const rZeroBase=r;
+    sc("A"+r,"영세율 과세표준",sLabelBg,"s"); sc("B"+r,zeroBase,sVal,"n"); sc("C"+r,"",sEmpty,"s");
+    sc("D"+r,"직접 입력",sFormula,"s"); sc("E"+r,"신고해야 할 금액",sDesc,"s"); r++;
+    sc("A"+r,"신고한 과세표준",sLabelBg,"s"); sc("B"+r,zeroReported,sVal,"n"); sc("C"+r,"",sEmpty,"s");
+    sc("D"+r,"직접 입력",sFormula,"s"); sc("E"+r,"실제 신고한 금액",sDesc,"s"); r++;
+    const rZeroUn=r;
+    sc("A"+r,"미(과소)신고 과세표준",sLabelBg,"s"); sf("B"+r,`MAX(B${rZeroBase}-B${rZeroBase+1},0)`,sVal);
+    sc("C"+r,"",sEmpty,"s"); sc("D"+r,`=B${rZeroBase}-B${rZeroBase+1}`,sFormula,"s"); sc("E"+r,"차액 (0 이상)",sDesc,"s"); r++;
+    sc("A"+r,"가산세율",sLabelBg,"s"); sc("B"+r,0.005,sPct,"n"); sc("C"+r,"",sEmpty,"s");
+    sc("D"+r,"0.5%",sFormula,"s"); sc("E"+r,"",sEmpty,"s"); r++;
+    const zeroResultRef = "B"+r;
+    sc("A"+r,"영세율 가산세",sLabelBg,"s"); sf("B"+r,`ROUND(B${rZeroUn}*B${rZeroUn+1},0)`,sResult);
+    sc("C"+r,"",sEmpty,"s"); sc("D"+r,`=B${rZeroUn} × B${rZeroUn+1}`,sFormula,"s"); sc("E"+r,"→ 요약표 반영",sDesc,"s"); r++;
+    r++;
 
-    // 미등록 상세
-    if(unregPenalty>0){
-      sc("A"+row,"[사업자 미등록 가산세 상세]",sSection,"s"); row++;
-      sc("A"+row,"공급가액",sLabelBg,"s"); sc("B"+row,unregSupply,sVal,"n");
-      sc("D"+row,"가산세(×1%)",sLabelBg,"s"); sf("E"+row,`ROUND(B${row}*0.01,0)`,sVal); row++;
-      row++;
-    }
+    // ── 4. 사업자 미등록 ──
+    sc("A"+r,"4. 사업자 미등록 가산세 산출내역",sSection,"s");
+    sc("B"+r,"",sSection,"s"); sc("C"+r,"",sSection,"s"); sc("D"+r,"",sSection,"s"); sc("E"+r,"",sSection,"s");
+    mg(r-1,0,r-1,4); r++;
+    sc("A"+r,"항목",sSubHeader,"s"); sc("B"+r,"금액",sSubHeader,"s"); sc("C"+r,"",sSubHeader,"s"); sc("D"+r,"산식",sSubHeader,"s"); sc("E"+r,"비고",sSubHeader,"s"); r++;
+    const rUnreg=r;
+    sc("A"+r,"미등록기간 공급가액",sLabelBg,"s"); sc("B"+r,unregSupply,sVal,"n"); sc("C"+r,"",sEmpty,"s");
+    sc("D"+r,"직접 입력",sFormula,"s"); sc("E"+r,"사업개시일~등록 전일",sDesc,"s"); r++;
+    sc("A"+r,"가산세율",sLabelBg,"s"); sc("B"+r,0.01,sPct,"n"); sc("C"+r,"",sEmpty,"s");
+    sc("D"+r,"1%",sFormula,"s"); sc("E"+r,"",sEmpty,"s"); r++;
+    const unregResultRef = "B"+r;
+    sc("A"+r,"미등록 가산세",sLabelBg,"s"); sf("B"+r,`ROUND(B${rUnreg}*B${rUnreg+1},0)`,sResult);
+    sc("C"+r,"",sEmpty,"s"); sc("D"+r,`=B${rUnreg} × B${rUnreg+1}`,sFormula,"s"); sc("E"+r,"→ 요약표 반영",sDesc,"s"); r++;
+    r++;
 
-    // 세금계산서 상세
-    if(totalInvPenalty>0){
-      sc("A"+row,"[세금계산서 관련 가산세 상세]",sSection,"s"); row++;
-      sc("A"+row,"위반유형",sHeader,"s"); sc("B"+row,"공급가액",sHeader,"s"); sc("C"+row,"가산세율",sHeader,"s"); sc("D"+row,"사유",sHeader,"s"); sc("E"+row,"가산세액",sHeader,"s"); row++;
-      invCalc.filter(i=>i.penalty>0).forEach(i=>{
+    // ── 5. 세금계산서 ──
+    sc("A"+r,"5. 세금계산서 관련 가산세 산출내역",sSection,"s");
+    sc("B"+r,"",sSection,"s"); sc("C"+r,"",sSection,"s"); sc("D"+r,"",sSection,"s"); sc("E"+r,"",sSection,"s");
+    mg(r-1,0,r-1,4); r++;
+    sc("A"+r,"위반유형",sSubHeader,"s"); sc("B"+r,"공급가액",sSubHeader,"s"); sc("C"+r,"가산세율",sSubHeader,"s"); sc("D"+r,"사유",sSubHeader,"s"); sc("E"+r,"가산세액",sSubHeader,"s"); r++;
+    const invStartRow = r;
+    const activeInv = invCalc.filter(i=>i.amount>0);
+    if(activeInv.length>0){
+      activeInv.forEach(i=>{
         const def=INV_TYPES.find(x=>x.key===i.type);
-        sc("A"+row,def?.label||"",sLabel,"s");
-        sc("B"+row,i.amount,sVal,"n");
-        sc("C"+row,i.rate/100,sPct,"n");
-        sc("D"+row,def?.desc||"",{font:{sz:9,color:{rgb:"616161"}},alignment:{horizontal:"left",wrapText:true},border:borders},"s");
-        sf("E"+row,`ROUND(B${row}*C${row},0)`,sVal);
-        row++;
+        sc("A"+r,def?.label||"",sLabel,"s");
+        sc("B"+r,i.amount,sVal,"n");
+        sc("C"+r,i.rate/100,sPct,"n");
+        sc("D"+r,def?.desc||"",sDesc,"s");
+        sf("E"+r,`ROUND(B${r}*C${r},0)`,sVal);
+        r++;
       });
+    } else {
+      sc("A"+r,"(해당 없음)",sLabel,"s"); sc("B"+r,0,sVal,"n"); sc("C"+r,"",sEmpty,"s"); sc("D"+r,"",sEmpty,"s"); sc("E"+r,0,sVal,"n"); r++;
     }
+    const invEndRow = r-1;
+    const invResultRef = "E"+r;
+    sc("A"+r,"세금계산서 가산세 소계",sLabelBg,"s"); sc("B"+r,"",sEmpty,"s"); sc("C"+r,"",sEmpty,"s"); sc("D"+r,"",sEmpty,"s");
+    sf("E"+r,`SUM(E${invStartRow}:E${invEndRow})`,sResult);
+    r++; r++;
+
+    // ────────────────────────────────────────
+    // SECTION 4: 요약표 (산출내역 셀 참조)
+    // ────────────────────────────────────────
+    const summaryStart = r;
+    sc("A"+r,"가 산 세  요 약 표",sTitle,"s");
+    sc("B"+r,"",sTitle,"s"); sc("C"+r,"",sTitle,"s"); sc("D"+r,"",sTitle,"s"); sc("E"+r,"",sTitle,"s");
+    mg(r-1,0,r-1,4); r++;
+    r++; // blank row
+
+    sc("A"+r,"가산세 종류",sHeader,"s"); sc("B"+r,"산출 가산세",sHeader,"s"); sc("C"+r,"감면율",sHeader,"s"); sc("D"+r,"감면액",sHeader,"s"); sc("E"+r,"납부할 가산세",sHeader,"s"); r++;
+
+    // 무신고/과소신고 → 산출내역 셀 참조
+    const sRow1=r;
+    sc("A"+r,penaltyLabel,sLabel,"s");
+    sf("B"+r,penaltyResultRef,sVal); // 산출내역의 결과 셀 참조
+    sc("C"+r, ((penaltyType==="nofile"&&filingType==="late")||(penaltyType==="under"&&filingType==="amended")) ? activeRedRate/100 : 0, sPct,"n");
+    sf("D"+r,`ROUND(B${r}*C${r},0)`,sVal);
+    sf("E"+r,`B${r}-D${r}`,sVal); r++;
+
+    // 납부지연 → 산출내역 셀 참조
+    sc("A"+r,"납부지연가산세",sLabel,"s");
+    sf("B"+r,lateResultRef,sVal);
+    sc("C"+r,0,sPct,"n"); sc("D"+r,0,sVal,"n");
+    sf("E"+r,`B${r}-D${r}`,sVal); r++;
+
+    // 영세율 → 산출내역 셀 참조
+    sc("A"+r,"영세율 신고불성실",sLabel,"s");
+    sf("B"+r,zeroResultRef,sVal);
+    sc("C"+r,0,sPct,"n"); sc("D"+r,0,sVal,"n");
+    sf("E"+r,`B${r}-D${r}`,sVal); r++;
+
+    // 미등록 → 산출내역 셀 참조
+    sc("A"+r,"사업자 미등록",sLabel,"s");
+    sf("B"+r,unregResultRef,sVal);
+    sc("C"+r,0,sPct,"n"); sc("D"+r,0,sVal,"n");
+    sf("E"+r,`B${r}-D${r}`,sVal); r++;
+
+    // 세금계산서 → 산출내역 소계 셀 참조
+    sc("A"+r,"세금계산서 관련",sLabel,"s");
+    sf("B"+r,invResultRef,sVal);
+    sc("C"+r,0,sPct,"n"); sc("D"+r,0,sVal,"n");
+    sf("E"+r,`B${r}-D${r}`,sVal); r++;
+
+    // 합계
+    r++; // blank
+    sc("A"+r,"합  계",sTotalLabel,"s");
+    sf("B"+r,`SUM(B${sRow1}:B${sRow1+4})`,sTotalVal);
+    sc("C"+r,"",{...sTotalLabel},"s");
+    sf("D"+r,`SUM(D${sRow1}:D${sRow1+4})`,sTotalVal);
+    sf("E"+r,`SUM(E${sRow1}:E${sRow1+4})`,sTotalVal);
+    r++;
 
     // 시트 설정
-    ws["!ref"] = XLSX.utils.encode_range({s:{r:0,c:0},e:{r:row,c:4}});
-    ws["!cols"] = [{wch:22},{wch:18},{wch:12},{wch:18},{wch:18}];
-    ws["!rows"] = [{hpt:30}]; // 타이틀 행 높이
-    // 눈금선 숨기기
-    ws["!sheetViews"] = [{showGridLines:false}];
+    ws["!ref"] = XLSX.utils.encode_range({s:{r:0,c:0},e:{r:r,c:4}});
+    ws["!cols"] = [{wch:26},{wch:20},{wch:12},{wch:26},{wch:20}];
+    ws["!merges"] = merges;
+
+    // 눈금선 끄기
+    if(!wb.Workbook) wb.Workbook = {};
+    if(!wb.Workbook.Views) wb.Workbook.Views = [{}];
+    if(!wb.Workbook.Sheets) wb.Workbook.Sheets = [];
+    wb.Workbook.Sheets[0] = { Hidden: 0, Views: [{ showGridLines: false }] };
 
     XLSX.utils.book_append_sheet(wb, ws, "가산세계산서");
     XLSX.writeFile(wb, `부가세_가산세_${taxYear}_${taxPeriod}.xlsx`);
